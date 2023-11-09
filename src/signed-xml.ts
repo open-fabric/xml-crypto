@@ -53,6 +53,7 @@ export class SignedXml {
   };
   implicitTransforms: ReadonlyArray<CanonicalizationOrTransformAlgorithmType> = [];
   keyInfoAttributes: { [attrName: string]: string } = {};
+  referenceResolver?: Function;
   getKeyInfoContent = SignedXml.getKeyInfoContent;
   getCertFromKeyInfo = SignedXml.getCertFromKeyInfo;
 
@@ -126,6 +127,7 @@ export class SignedXml {
       inclusiveNamespacesPrefixList,
       implicitTransforms,
       keyInfoAttributes,
+      referenceResolver,
       getKeyInfoContent,
       getCertFromKeyInfo,
     } = options;
@@ -147,6 +149,7 @@ export class SignedXml {
     }
     this.implicitTransforms = implicitTransforms ?? this.implicitTransforms;
     this.keyInfoAttributes = keyInfoAttributes ?? this.keyInfoAttributes;
+    this.referenceResolver = referenceResolver;
     this.getKeyInfoContent = getKeyInfoContent ?? this.getKeyInfoContent;
     this.getCertFromKeyInfo = getCertFromKeyInfo ?? this.getCertFromKeyInfo;
     this.CanonicalizationAlgorithms;
@@ -413,29 +416,55 @@ export class SignedXml {
     const uri = ref.uri?.[0] === "#" ? ref.uri.substring(1) : ref.uri;
     let elem: xpath.SelectSingleReturnType = null;
 
-    if (uri === "") {
-      elem = xpath.select1("//*", doc);
-    } else if (uri?.indexOf("'") !== -1) {
+    if (uri && uri?.indexOf("'") !== -1) {
       // xpath injection
       throw new Error("Cannot validate a uri with quotes inside it");
     } else {
       let num_elements_for_id = 0;
-      for (const attr of this.idAttributes) {
-        const tmp_elemXpath = `//*[@*[local-name(.)='${attr}']='${uri}']`;
-        const tmp_elem = xpath.select(tmp_elemXpath, doc);
-        if (utils.isArrayHasLength(tmp_elem)) {
-          num_elements_for_id += tmp_elem.length;
 
-          if (num_elements_for_id > 1) {
-            throw new Error(
-              "Cannot validate a document which contains multiple elements with the " +
+      // Trying to resolve node by referenceResolver first
+      if (this.referenceResolver) {
+        const resolvedElemXpath = this.referenceResolver(ref);
+
+        if (resolvedElemXpath) {
+          const resolvedElements = xpath.select(resolvedElemXpath, doc);
+
+          if (utils.isArrayHasLength(resolvedElements)) {
+            num_elements_for_id += resolvedElements.length;
+
+            if (num_elements_for_id > 1) {
+              throw new Error(
+                "Cannot validate a document which contains multiple elements with the " +
                 "same value for the ID / Id / Id attributes, in order to prevent " +
                 "signature wrapping attack.",
-            );
-          }
+              );
+            }
 
-          elem = tmp_elem[0];
-          ref.xpath = tmp_elemXpath;
+            elem = resolvedElements[0];
+            ref.xpath = resolvedElemXpath;
+          }
+        }
+      }
+
+      // If referenceResolver does not resolve the element, an attempt will be made to locate the node using the Id attribute.
+      if(!elem) {
+        for (const attr of this.idAttributes) {
+          const tmp_elemXpath = `//*[@*[local-name(.)='${attr}']='${uri}']`;
+          const tmp_elem = xpath.select(tmp_elemXpath, doc);
+          if (utils.isArrayHasLength(tmp_elem)) {
+            num_elements_for_id += tmp_elem.length;
+  
+            if (num_elements_for_id > 1) {
+              throw new Error(
+                "Cannot validate a document which contains multiple elements with the " +
+                  "same value for the ID / Id / Id attributes, in order to prevent " +
+                  "signature wrapping attack.",
+              );
+            }
+  
+            elem = tmp_elem[0];
+            ref.xpath = tmp_elemXpath;
+          }
         }
       }
     }
@@ -647,7 +676,7 @@ export class SignedXml {
     xpath,
     transforms = ["http://www.w3.org/2001/10/xml-exc-c14n#"],
     digestAlgorithm,
-    uri = "",
+    uri,
     digestValue,
     inclusiveNamespacesPrefixList = [],
     isEmptyUri = false,
@@ -919,12 +948,15 @@ export class SignedXml {
 
       for (const node of nodes) {
         if (ref.isEmptyUri) {
-          res += `<${prefix}Reference URI="">`;
+            res += `<${prefix}Reference URI="">`;
+        } else if(ref.uri === undefined) {
+          res += `<${prefix}Reference>`;
         } else {
           const id = this.ensureHasId(node);
           ref.uri = id;
           res += `<${prefix}Reference URI="#${id}">`;
         }
+
         res += `<${prefix}Transforms>`;
         for (const trans of ref.transforms || []) {
           const transform = this.findCanonicalizationAlgorithm(trans);
