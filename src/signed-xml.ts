@@ -37,7 +37,7 @@ export class SignedXml {
    * One of the supported signature algorithms.
    * @see {@link SignatureAlgorithmType}
    */
-  signatureAlgorithm: SignatureAlgorithmType = "http://www.w3.org/2000/09/xmldsig#rsa-sha1";
+  signatureAlgorithm?: SignatureAlgorithmType = undefined;
   /**
    * Rules used to convert an XML document into its canonical form.
    */
@@ -112,6 +112,8 @@ export class SignedXml {
     ds: "http://www.w3.org/2000/09/xmldsig#",
   };
 
+  static noop = () => null;
+
   /**
    * The SignedXml constructor provides an abstraction for sign and verify xml documents. The object is constructed using
    * @param options {@link SignedXmlOptions}
@@ -151,7 +153,7 @@ export class SignedXml {
     this.keyInfoAttributes = keyInfoAttributes ?? this.keyInfoAttributes;
     this.referenceResolver = referenceResolver;
     this.getKeyInfoContent = getKeyInfoContent ?? this.getKeyInfoContent;
-    this.getCertFromKeyInfo = getCertFromKeyInfo ?? this.getCertFromKeyInfo;
+    this.getCertFromKeyInfo = getCertFromKeyInfo ?? SignedXml.noop;
     this.CanonicalizationAlgorithms;
     this.HashAlgorithms;
     this.SignatureAlgorithms;
@@ -166,7 +168,7 @@ export class SignedXml {
     this.SignatureAlgorithms = {
       "http://www.w3.org/2000/09/xmldsig#hmac-sha1": signatureAlgorithms.HmacSha1,
     };
-    this.getKeyInfoContent = () => null;
+    this.getKeyInfoContent = SignedXml.noop;
   }
 
   /**
@@ -217,9 +219,9 @@ export class SignedXml {
    */
   static getCertFromKeyInfo(keyInfo?: Node | null): string | null {
     if (keyInfo != null) {
-      const certs = xpath.select1(".//*[local-name(.)='X509Certificate']", keyInfo);
-      if (isDomNode.isNodeLike(certs)) {
-        return utils.derToPem(certs.textContent || "", "CERTIFICATE");
+      const cert = xpath.select1(".//*[local-name(.)='X509Certificate']", keyInfo);
+      if (isDomNode.isNodeLike(cert)) {
+        return utils.derToPem(cert.textContent ?? "", "CERTIFICATE");
       }
     }
 
@@ -276,7 +278,7 @@ export class SignedXml {
 
       if (verified === false) {
         throw new Error(
-          "invalid signature: the signature value ${this.signatureValue} is incorrect",
+          `invalid signature: the signature value ${this.signatureValue} is incorrect`,
         );
       }
 
@@ -350,7 +352,10 @@ export class SignedXml {
     }
   }
 
-  private findSignatureAlgorithm(name: SignatureAlgorithmType) {
+  private findSignatureAlgorithm(name?: SignatureAlgorithmType) {
+    if (name == null) {
+      throw new Error("signatureAlgorithm is required");
+    }
     const algo = this.SignatureAlgorithms[name];
     if (algo) {
       return new algo();
@@ -665,7 +670,7 @@ export class SignedXml {
    * Adds a reference to the signature.
    *
    * @param xpath The XPath expression to select the XML nodes to be referenced.
-   * @param transforms An array of transform algorithms to be applied to the selected nodes. Defaults to ["http://www.w3.org/2001/10/xml-exc-c14n#"].
+   * @param transforms An array of transform algorithms to be applied to the selected nodes.
    * @param digestAlgorithm The digest algorithm to use for computing the digest value.
    * @param uri The URI identifier for the reference. If empty, an empty URI will be used.
    * @param digestValue The expected digest value for the reference.
@@ -674,7 +679,7 @@ export class SignedXml {
    */
   addReference({
     xpath,
-    transforms = ["http://www.w3.org/2001/10/xml-exc-c14n#"],
+    transforms,
     digestAlgorithm,
     uri,
     digestValue,
@@ -683,6 +688,10 @@ export class SignedXml {
   }: Partial<Reference> & Pick<Reference, "xpath">): void {
     if (digestAlgorithm == null) {
       throw new Error("digestAlgorithm is required");
+    }
+
+    if (!utils.isArrayHasLength(transforms)) {
+      throw new Error("transforms must contain at least one transform algorithm");
     }
 
     this.references.push({
@@ -909,7 +918,7 @@ export class SignedXml {
     }
   }
 
-  getKeyInfo(prefix) {
+  private getKeyInfo(prefix) {
     const currentPrefix = prefix ? `${prefix}:` : "";
 
     let keyInfoAttrs = "";

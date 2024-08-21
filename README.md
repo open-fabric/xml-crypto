@@ -49,14 +49,6 @@ This will enable HMAC and disable digital signature algorithms. Due to key
 confusion issues, it is risky to have both HMAC-based and public key digital
 signature algorithms enabled at same time.
 
-By default the following algorithms are used:
-
-_Canonicalization/Transformation Algorithm:_ Exclusive Canonicalization <http://www.w3.org/2001/10/xml-exc-c14n#>
-
-_Hashing/Digest Algorithm:_ Must be specified by the user
-
-_Signature Algorithm:_ RSA-SHA1 <http://www.w3.org/2000/09/xmldsig#rsa-sha1>
-
 [You are able to extend xml-crypto with custom algorithms.](#customizing-algorithms)
 
 ## Signing Xml documents
@@ -65,8 +57,8 @@ When signing a xml document you can pass the following options to the `SignedXml
 
 - `privateKey` - **[required]** a `Buffer` or pem encoded `String` containing your private key
 - `publicCert` - **[optional]** a `Buffer` or pem encoded `String` containing your public key
-- `signatureAlgorithm` - **[optional]** one of the supported [signature algorithms](#signature-algorithms). Ex: `sign.signatureAlgorithm = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"`
-- `canonicalizationAlgorithm` - **[optional]** one of the supported [canonicalization algorithms](#canonicalization-and-transformation-algorithms). Ex: `sign.canonicalizationAlgorithm = "http://www.w3.org/2001/10/xml-exc-c14n#WithComments"`
+- `signatureAlgorithm` - **[required]** one of the supported [signature algorithms](#signature-algorithms). Ex: `sign.signatureAlgorithm = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"`
+- `canonicalizationAlgorithm` - **[required]** one of the supported [canonicalization algorithms](#canonicalization-and-transformation-algorithms). Ex: `sign.canonicalizationAlgorithm = "http://www.w3.org/2001/10/xml-exc-c14n#WithComments"`
 
 Use this code:
 
@@ -77,7 +69,13 @@ var SignedXml = require("xml-crypto").SignedXml,
 var xml = "<library>" + "<book>" + "<name>Harry Potter</name>" + "</book>" + "</library>";
 
 var sig = new SignedXml({ privateKey: fs.readFileSync("client.pem") });
-sig.addReference({ xpath: "//*[local-name(.)='book']" });
+sig.addReference({
+  xpath: "//*[local-name(.)='book']",
+  digestAlgorithm: "http://www.w3.org/2000/09/xmldsig#sha1",
+  transforms: ["http://www.w3.org/2001/10/xml-exc-c14n#"],
+});
+sig.canonicalizationAlgorithm = "http://www.w3.org/2001/10/xml-exc-c14n#";
+sig.signatureAlgorithm = "http://www.w3.org/2000/09/xmldsig#rsa-sha1";
 sig.computeSignature(xml);
 fs.writeFileSync("signed.xml", sig.getSignedXml());
 ```
@@ -108,7 +106,24 @@ The result will be:
 
 Note:
 
-If you set the `publicCert` property, a `<X509Data></X509Data>` element with the public certificate will be generated in the signature.
+If you set the `publicCert` and the `getKeyInfoContent` properties, a `<KeyInfo></KeyInfo>` element with the public certificate will be generated in the signature:
+
+```xml
+<Signature xmlns="http://www.w3.org/2000/09/xmldsig#">
+  <SignedInfo>
+    ...[signature info removed]...
+  </SignedInfo>
+  <SignatureValue>vhWzpQyIYuncHUZV9W...[long base64 removed]...</SignatureValue>
+  <KeyInfo>
+    <X509Data>
+      <X509Certificate>MIIGYjCCBJagACCBN...[long base64 removed]...</X509Certificate>
+    </X509Data>
+  </KeyInfo>
+</Signature>
+```
+
+For `getKeyInfoContent`, a default implementation `SignedXml.getKeyInfoContent` is available.
+
 To customize this see [customizing algorithms](#customizing-algorithms) for an example.
 
 ## Verifying Xml documents
@@ -118,7 +133,7 @@ When verifying a xml document you can pass the following options to the `SignedX
 - `publicCert` - **[optional]** your certificate as a string, a string of multiple certs in PEM format, or a Buffer
 - `privateKey` - **[optional]** your private key as a string or a Buffer - used for verifying symmetrical signatures (HMAC)
 
-The certificate that will be used to check the signature will first be determined by calling `.getCertFromKeyInfo()`, which function you can customize as you see fit. If that returns `null`, then `publicCert` is used. If that is `null`, then `privateKey` is used (for symmetrical signing applications). If you do not want to trust any embedded `<KeyInfo />` node, preferring to validate the signature using a provided `publicCert`, you can set `getCertFromKeyInfo` to return `null`.
+The certificate that will be used to check the signature will first be determined by calling `this.getCertFromKeyInfo()`, which function you can customize as you see fit. If that returns `null`, then `publicCert` is used. If that is `null`, then `privateKey` is used (for symmetrical signing applications).
 
 Example:
 
@@ -243,12 +258,12 @@ The `SignedXml` constructor provides an abstraction for sign and verify xml docu
 - `idAttribute` - string - default `Id` or `ID` or `id` - the name of the attribute that contains the id of the element
 - `privateKey` - string or Buffer - default `null` - the private key to use for signing
 - `publicCert` - string or Buffer - default `null` - the public certificate to use for verifying
-- `signatureAlgorithm` - string - default `http://www.w3.org/2000/09/xmldsig#rsa-sha1` - the signature algorithm to use
+- `signatureAlgorithm` - string - the signature algorithm to use
 - `canonicalizationAlgorithm` - string - default `undefined` - the canonicalization algorithm to use
 - `inclusiveNamespacesPrefixList` - string - default `null` - a list of namespace prefixes to include during canonicalization
 - `implicitTransforms` - string[] - default `[]` - a list of implicit transforms to use during verification
 - `keyInfoAttributes` - object - default `{}` - a hash of attributes and values `attrName: value` to add to the KeyInfo node
-- `getKeyInfoContent` - function - default `SignedXml.geTKeyInfoContent` - a function that returns the content of the KeyInfo node
+- `getKeyInfoContent` - function - default `noop` - a function that returns the content of the KeyInfo node
 - `getCertFromKeyInfo` - function - default `SignedXml.getCertFromKeyInfo` - a function that returns the certificate from the `<KeyInfo />` node
 
 #### API
@@ -257,7 +272,7 @@ A `SignedXml` object provides the following methods:
 
 To sign xml documents:
 
-- `addReference(xpath, [transforms], [digestAlgorithm])` - adds a reference to a xml element where:
+- `addReference(xpath, transforms, digestAlgorithm)` - adds a reference to a xml element where:
   - `xpath` - a string containing a XPath expression referencing a xml element
   - `transforms` - an array of [transform algorithms](#canonicalization-and-transformation-algorithms), the referenced element will be transformed for each value in the array
   - `digestAlgorithm` - one of the supported [hashing algorithms](#hashing-algorithms)
@@ -292,8 +307,8 @@ var SignedXml = require("xml-crypto").SignedXml,
 Now define the extension point you want to implement. You can choose one or more.
 
 To determine the inclusion and contents of a `<KeyInfo />` element, the function
-`getKeyInfoContent()` is called. There is a default implementation of this. If you wish to change
-this implementation, provide your own function assigned to the property `.getKeyInfoContent`. If
+`this.getKeyInfoContent()` is called. There is a default implementation of this. If you wish to change
+this implementation, provide your own function assigned to the property `this.getKeyInfoContent`. If you prefer to use the default implementation, assign `SignedXml.getKeyInfoContent` to `this.getKeyInfoContent` If
 there are no attributes and no contents to the `<KeyInfo />` element, it won't be included in the
 generated XML.
 
@@ -391,7 +406,13 @@ function signXml(xml, xpath, key, dest) {
     digestAlgorithm: "http://myDigestAlgorithm",
   });
 
-  sig.addReference({ xpath });
+  sig.addReference({
+    xpath,
+    transforms: ["http://MyTransformation"],
+    digestAlgorithm: "http://myDigestAlgorithm",
+  });
+  sig.canonicalizationAlgorithm = "http://www.w3.org/2001/10/xml-exc-c14n#";
+  sig.signatureAlgorithm = "http://www.w3.org/2000/09/xmldsig#rsa-sha1";
   sig.computeSignature(xml);
   fs.writeFileSync(dest, sig.getSignedXml());
 }
@@ -424,6 +445,8 @@ function AsyncSignatureAlgorithm() {
 
 var sig = new SignedXml({ signatureAlgorithm: "http://asyncSignatureAlgorithm" });
 sig.SignatureAlgorithms["http://asyncSignatureAlgorithm"] = AsyncSignatureAlgorithm;
+sig.signatureAlgorithm = "http://asyncSignatureAlgorithm";
+sig.canonicalizationAlgorithm = "http://www.w3.org/2001/10/xml-exc-c14n#";
 sig.computeSignature(xml, opts, function (err) {
   var signedResponse = sig.getSignedXml();
 });
@@ -474,7 +497,13 @@ var SignedXml = require("xml-crypto").SignedXml,
 var xml = "<library>" + "<book>" + "<name>Harry Potter</name>" + "</book>" + "</library>";
 
 var sig = new SignedXml({ privateKey: fs.readFileSync("client.pem") });
-sig.addReference({ xpath: "//*[local-name(.)='book']" });
+sig.addReference({
+  xpath: "//*[local-name(.)='book']",
+  digestAlgorithm: "http://www.w3.org/2000/09/xmldsig#sha1",
+  transforms: ["http://www.w3.org/2001/10/xml-exc-c14n#"],
+});
+sig.canonicalizationAlgorithm = "http://www.w3.org/2001/10/xml-exc-c14n#";
+sig.signatureAlgorithm = "http://www.w3.org/2000/09/xmldsig#rsa-sha1";
 sig.computeSignature(xml, {
   prefix: "ds",
 });
@@ -497,7 +526,13 @@ var SignedXml = require("xml-crypto").SignedXml,
 var xml = "<library>" + "<book>" + "<name>Harry Potter</name>" + "</book>" + "</library>";
 
 var sig = new SignedXml({ privateKey: fs.readFileSync("client.pem") });
-sig.addReference({ xpath: "//*[local-name(.)='book']" });
+sig.addReference({
+  xpath: "//*[local-name(.)='book']",
+  digestAlgorithm: "http://www.w3.org/2000/09/xmldsig#sha1",
+  transforms: ["http://www.w3.org/2001/10/xml-exc-c14n#"],
+});
+sig.canonicalizationAlgorithm = "http://www.w3.org/2001/10/xml-exc-c14n#";
+sig.signatureAlgorithm = "http://www.w3.org/2000/09/xmldsig#rsa-sha1";
 sig.computeSignature(xml, {
   location: { reference: "//*[local-name(.)='book']", action: "after" }, //This will place the signature after the book element
 });
